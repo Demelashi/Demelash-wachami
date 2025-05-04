@@ -1,0 +1,223 @@
+# ========== STEP 1: SETUP AND IMPORTS ==========
+import os
+import pandas as pd
+from datetime import datetime
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, ContextTypes, CommandHandler,
+    MessageHandler, filters
+)
+import nest_asyncio
+nest_asyncio.apply()  # Required for Jupyter Notebooks
+
+# ========== STEP 2: BOT CONFIGURATION ==========
+TOKEN = "7888149981:AAFrdXdYMPLYjz-F-jYQNOwSFWb4-PdfAHs"  # Replace with your actual token
+ADMIN_IDS = [123456789]  # Replace with your Telegram user ID
+
+# Save location for reports (OneDrive-synced folder)
+REPORT_FOLDER = r"C:\Users\demen\OneDrive\ERCS_SD_Bot"
+os.makedirs(REPORT_FOLDER, exist_ok=True)
+
+# ========== STEP 3: LANGUAGE & MENU ==========
+LANGUAGES = {'en': 'English', 'am': 'Amharic'}
+user_data = {}  # User session storage
+all_reports = []  # List to store reports
+
+DISASTER_TYPES = [
+    ("Conflict", "💥"),
+    ("Flood", "🌊"),
+    ("Fire", "🔥"),
+    ("Road Traffic Accident", "🚗💥"),
+    ("Landslide", "🌍🌿"),
+    ("Earthquake", "🌍⚡"),
+    ("Disease", "💉"),
+    ("Others", "❓")
+]
+
+DISEASE_TYPES = [
+    ("Malaria", "🦟"),
+    ("Cholera", "💩"),
+    ("Measles", "🤒"),
+    ("COVID 19", "🤒"),
+    ("Others", "❓")
+]
+
+WOREDA_OPTIONS = [
+    "Aleta Chuko", "Aleta Wendo", "Aleta Wondo town", "Arbegona",
+    "Aroresa", "Bensa", "Hawassa zuriya", "Hawassa", "Bilate Zuria", "Bona Zuria", "Boricha",
+    "Wonosho", "Yirgalem town"
+]
+
+# ========== STEP 4: REPORT GENERATION ==========
+def generate_weekly_report():
+    if not all_reports:
+        return None
+    df = pd.DataFrame(all_reports)
+    df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+    df['Week'] = df['Timestamp'].dt.isocalendar().week
+    filename = os.path.join(
+        REPORT_FOLDER, f"Emergency_Report_Week_{datetime.now().strftime('%W')}.xlsx"
+    )
+    df.to_excel(filename, index=False)
+    return filename
+
+# ========== STEP 5: START & MENU ==========
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_data:
+        user_data[user_id] = {'lang': 'en'}
+    await show_main_menu(update, user_id)
+
+async def show_main_menu(update, user_id):
+    lang = user_data[user_id].get('lang', 'en')
+    menu_items = [
+        ["🆘 Emergency Report", "🆘 ድንገተኛ ክስተት ሪፖርት"],
+        ["💬 Suggestions/Feedback", "💬 አስተያየቶች/ግብረመልስ"],
+        ["🌐 Language", "🌐 ቋንቋ"]
+    ]
+    menu = [[item[0] if lang == 'en' else item[1]] for item in menu_items]
+    await update.message.reply_text(
+        "Please select an option:" if lang == 'en' else "እባክዎን አንዱን ይምረጡ።",
+        reply_markup=ReplyKeyboardMarkup(menu, resize_keyboard=True)
+    )
+
+# ========== STEP 6: MESSAGE HANDLER ==========
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    msg = update.message.text
+
+    if user_id not in user_data:
+        await start(update, context)
+        return
+
+    lang = user_data[user_id].get('lang', 'en')
+
+    # Language switch
+    if msg in ["🌐 Language", "🌐 ቋንቋ"]:
+        user_data[user_id]['lang'] = 'am' if lang == 'en' else 'en'
+        await show_main_menu(update, user_id)
+        return
+
+    # Main menu options
+    if msg in ["🆘 Emergency Report", "🆘 ድንገተኛ ክስተት ሪፖርት"]:
+        await start_emergency_report(update, user_id, lang)
+        return
+    if msg in ["💬 Suggestions/Feedback", "💬 አስተያየቶች/ግብረመልስ"]:
+        await start_feedback(update, user_id, lang)
+        return
+
+    # Step-by-step handling
+    step = user_data[user_id].get('step')
+    if step == 'disaster_type':
+        await process_disaster_type(update, user_id, lang, msg)
+    elif step == 'disease_type':
+        await process_disease_type(update, user_id, lang, msg)
+    elif step == 'woreda':
+        await request_kebele(update, user_id, lang, msg)
+    elif step == 'kebele':
+        await request_affected(update, user_id, lang, msg)
+    elif step == 'affected':
+        await request_deaths(update, user_id, lang, msg)
+    elif step == 'dead':
+        await request_suggestions(update, user_id, lang, msg)
+    elif step == 'suggestions':
+        await complete_report(update, user_id, lang, msg)
+
+# ========== STEP 7: REPORT FLOW ==========
+async def start_emergency_report(update, user_id, lang):
+    user_data[user_id]['step'] = 'disaster_type'
+    user_data[user_id]['form'] = {}
+    keyboard = ReplyKeyboardMarkup([[f"{d[1]} {d[0]}"] for d in DISASTER_TYPES], resize_keyboard=True)
+    await update.message.reply_text(
+        "Select Disaster Type:" if lang == 'en' else "የአደጋውን አይነት ይምረጡ:",
+        reply_markup=keyboard
+    )
+
+async def process_disaster_type(update, user_id, lang, msg):
+    for disaster, symbol in DISASTER_TYPES:
+        if msg.startswith(symbol):
+            user_data[user_id]['form']['Disaster Type'] = disaster
+            break
+    if user_data[user_id]['form']['Disaster Type'] == "Disease":
+        user_data[user_id]['step'] = 'disease_type'
+        keyboard = ReplyKeyboardMarkup([[f"{d[1]} {d[0]}"] for d in DISEASE_TYPES], resize_keyboard=True)
+        await update.message.reply_text(
+            "Select Disease Type:" if lang == 'en' else "የበሽታውን አይነት ይምረጡ:",
+            reply_markup=keyboard
+        )
+    else:
+        user_data[user_id]['form']['Disease'] = 'N/A'
+        await request_woreda(update, user_id, lang)
+
+async def process_disease_type(update, user_id, lang, msg):
+    for disease, symbol in DISEASE_TYPES:
+        if msg.startswith(symbol):
+            user_data[user_id]['form']['Disease'] = disease
+            break
+    await request_woreda(update, user_id, lang)
+
+async def request_woreda(update, user_id, lang):
+    user_data[user_id]['step'] = 'woreda'
+    keyboard = ReplyKeyboardMarkup([[w] for w in WOREDA_OPTIONS], resize_keyboard=True)
+    await update.message.reply_text(
+        "Select Woreda:" if lang == 'en' else "ወረዳ ይምረጡ:",
+        reply_markup=keyboard
+    )
+
+async def request_kebele(update, user_id, lang, msg):
+    user_data[user_id]['form']['Woreda'] = msg
+    user_data[user_id]['step'] = 'kebele'
+    await update.message.reply_text(
+        "Enter Kebele:" if lang == 'en' else "ቀበሌ ያስገቡ:"
+    )
+
+async def request_affected(update, user_id, lang, msg):
+    user_data[user_id]['form']['Kebele'] = msg
+    user_data[user_id]['step'] = 'affected'
+    await update.message.reply_text(
+        "Enter number of affected people:" if lang == 'en' else "ተጎዳኙትን ብዛት ያስገቡ:"
+    )
+
+async def request_deaths(update, user_id, lang, msg):
+    user_data[user_id]['form']['Affected'] = msg
+    user_data[user_id]['step'] = 'dead'
+    await update.message.reply_text(
+        "Enter number of deaths:" if lang == 'en' else "የሞቱትን ብዛት ያስገቡ:"
+    )
+
+async def request_suggestions(update, user_id, lang, msg):
+    user_data[user_id]['form']['Deaths'] = msg
+    user_data[user_id]['step'] = 'suggestions'
+    await update.message.reply_text(
+        "Any suggestions for response?" if lang == 'en' else "ምንም ዓይነት የመልስ አማራጭ አለ?"
+    )
+
+async def complete_report(update, user_id, lang, msg):
+    user_data[user_id]['form']['Suggestions'] = msg
+    user_data[user_id]['form']['Timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    all_reports.append(user_data[user_id]['form'])
+    generate_weekly_report()
+
+    await update.message.reply_text(
+        "✅ Report submitted successfully!" if lang == 'en' else "✅ ሪፖርቱ በትክክል ተሰጥቷል!"
+    )
+    await show_main_menu(update, user_id)
+
+# ========== STEP 8: FEEDBACK ==========
+async def start_feedback(update, user_id, lang):
+    user_data[user_id]['step'] = 'suggestions'
+    await update.message.reply_text(
+        "Please enter your comment/suggestion:" if lang == 'en'
+        else "እባክዎን አስተያየትዎን ያስገቡ።"
+    )
+
+# ========== STEP 9: LAUNCH BOT ==========
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("🤖 Bot is running. Press Ctrl+C to stop.")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
