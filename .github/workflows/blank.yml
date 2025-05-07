@@ -1,0 +1,41 @@
+# bot.py (Main File)
+import os
+import pandas as pd
+from datetime import datetime
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, ContextTypes, CommandHandler,
+    MessageHandler, filters
+)
+
+# ========== CLOUD ADAPTATIONS ==========
+# 1. Use environment variables for sensitive data
+TOKEN = os.environ.get("7888149981:AAFrdXdYMPLYjz-F-jYQNOwSFWb4-PdfAHs")  # Set in Heroku config
+ADMIN_IDS = [int(os.environ.get("123456789"))]  # Convert to int
+
+# 2. Cloud-friendly file storage
+REPORT_FOLDER = "reports"
+os.makedirs(REPORT_FOLDER, exist_ok=True)
+
+# ========== REST OF YOUR CODE (MODIFIED BELOW) ==========
+# ... [Keep all your existing code structure] ...
+
+# ========== WEBHOOK CONFIGURATION ==========
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+    
+    # Add handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Heroku deployment config
+    port = int(os.environ.get("PORT", 8443))
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        secret_token=os.environ.get("SECRET_TOKEN"),
+        webhook_url=os.environ.get("WEBHOOK_URL")
+    )
+
+if __name__ == '__main__':
+    main()
